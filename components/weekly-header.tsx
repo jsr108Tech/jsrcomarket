@@ -31,7 +31,7 @@ export function WeeklyHeader({
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-            <span className="font-semibold">{users.filter((user) => user.active).length}</span> active members
+            <span className="font-semibold">{users.filter((user) => user.active && user.role !== "admin").length}</span> active members
           </div>
           {isAdmin && (
             <button

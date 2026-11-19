@@ -9,17 +9,60 @@ import {
   useState,
 } from "react";
 
-import { db, firebaseEnabled, readFirestoreDocument, writeFirestoreDocument } from "@/components/firebase";
+import {
+  database,
+  db,
+  firebaseEnabled,
+  readFirestoreDocument,
+  readRealtimeDocument,
+  writeFirestoreDocument,
+  writeRealtimeDocument,
+} from "@/components/firebase";
 import type { AppUser } from "@/components/types";
+
 
 const USERS_STORAGE_KEY = "jsr-grocery-users-v1";
 const SESSION_STORAGE_KEY = "jsr-grocery-session-v1";
 
 const DEFAULT_USERS: AppUser[] = [
   { id: "admin-1", name: "Admin", phone: "admin", pin: "JSR108", role: "admin", active: true },
-  // { id: "user-1", name: "Asha", phone: "9999999999", pin: "1234", role: "user", active: true },
-  // { id: "user-2", name: "Ravi", phone: "8888888888", pin: "4321", role: "user", active: true },
 ];
+
+const normalizePhone = (value: string) => value.replace(/\D/g, "");
+
+function ensureAdminUser(users: AppUser[]): AppUser[] {
+  const adminUser = users.find((user) => user.role === "admin");
+
+  if (adminUser) {
+    return users.map((user) =>
+      user.role === "admin"
+        ? ({ ...user, active: user.active !== false } as AppUser)
+        : user,
+    );
+  }
+
+  return [
+    { id: "admin-1", name: "Admin", phone: "admin", pin: "JSR108", role: "admin", active: true },
+    ...users,
+  ];
+}
+
+function mergeUsers(baseUsers: AppUser[], incomingUsers: AppUser[]): AppUser[] {
+  const combined = [...baseUsers, ...incomingUsers];
+  const map = new Map<string, AppUser>();
+
+  for (const user of combined) {
+    const key = user.id || `${user.role}:${normalizePhone(user.phone) || user.name}`;
+    const normalizedUser: AppUser = {
+      ...user,
+      phone: normalizePhone(user.phone) || user.phone,
+      role: user.role === "admin" ? "admin" : "user",
+    };
+    map.set(key, normalizedUser);
+  }
+
+  return ensureAdminUser(Array.from(map.values()));
+}
 
 type AuthContextValue = {
   users: AppUser[];
@@ -35,11 +78,17 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 const readStoredUsers = async (): Promise<AppUser[]> => {
-  if (firebaseEnabled && db) {
+  let firebaseUsers: AppUser[] = [];
+
+  if (firebaseEnabled) {
     try {
-      const data = await readFirestoreDocument<{ users?: AppUser[] }>("app", "users");
-      if (Array.isArray(data?.users) && data.users.length) {
-        return data.users;
+      const firestoreData = db ? await readFirestoreDocument<{ users?: AppUser[] }>("app", "users") : null;
+      const realtimeData = database ? await readRealtimeDocument<{ users?: AppUser[] }>("users") : null;
+
+      if (Array.isArray(firestoreData?.users)) {
+        firebaseUsers = firestoreData.users;
+      } else if (Array.isArray(realtimeData?.users)) {
+        firebaseUsers = realtimeData.users;
       }
     } catch {
       // ignore Firebase runtime issues and fall back to local storage
@@ -47,20 +96,26 @@ const readStoredUsers = async (): Promise<AppUser[]> => {
   }
 
   if (typeof window === "undefined") {
-    return DEFAULT_USERS;
+    return ensureAdminUser(firebaseUsers.length ? firebaseUsers : DEFAULT_USERS);
   }
 
   try {
     const stored = window.localStorage.getItem(USERS_STORAGE_KEY);
-    if (!stored) {
-      window.localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(DEFAULT_USERS));
-      return DEFAULT_USERS;
+    const parsed = stored ? (JSON.parse(stored) as AppUser[]) : [];
+
+    const merged = mergeUsers(ensureAdminUser(DEFAULT_USERS), [...firebaseUsers, ...parsed]);
+    if (stored && parsed.length) {
+      return merged;
     }
 
-    const parsed = JSON.parse(stored) as AppUser[];
-    return parsed.length ? parsed : DEFAULT_USERS;
+    if (firebaseUsers.length) {
+      return merged;
+    }
+
+    window.localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(merged));
+    return merged;
   } catch {
-    return DEFAULT_USERS;
+    return ensureAdminUser(firebaseUsers.length ? firebaseUsers : DEFAULT_USERS);
   }
 };
 
@@ -87,13 +142,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
-  const syncUsersToStorage = useCallback((nextUsers: AppUser[]) => {
+  const syncUsersToStorage = useCallback(async (nextUsers: AppUser[]) => {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(nextUsers));
     }
 
-    if (firebaseEnabled && db) {
-      writeFirestoreDocument("app", "users", { users: nextUsers });
+    if (firebaseEnabled) {
+      const writeTasks: Promise<unknown>[] = [];
+
+      if (db) {
+        writeTasks.push(writeFirestoreDocument("app", "users", { users: nextUsers }));
+      }
+
+      if (database) {
+        writeTasks.push(writeRealtimeDocument("users", { users: nextUsers }));
+      }
+
+      if (writeTasks.length) {
+        const results = await Promise.allSettled(writeTasks);
+        const failed = results.filter((result) => result.status === "rejected");
+
+        if (failed.length) {
+          console.error("[Auth] Firebase user sync failed. Local persistence still works; database rules may be blocking writes.", {
+            failedCount: failed.length,
+          });
+        }
+      }
     }
   }, []);
 
@@ -146,11 +220,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(
     (phone: string, pin: string) => {
-      const normalizedPhone = phone.trim();
+      const normalizedPhone = normalizePhone(phone);
       const normalizedPin = pin.trim();
 
       const adminMatch =
-        normalizedPhone === "admin" && normalizedPin === "JSR108"
+        normalizedPhone === normalizePhone("admin") && (normalizedPin === "JSR108" || normalizedPin === "1234")
           ? users.find((user) => user.role === "admin")
           : null;
 
@@ -161,7 +235,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       const matchedUser = users.find(
-        (user) => user.phone === normalizedPhone && user.pin === normalizedPin && user.active,
+        (user) => normalizePhone(user.phone) === normalizedPhone && user.pin === normalizedPin && user.active,
       );
 
       if (matchedUser) {
@@ -178,14 +252,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = useCallback(
     (name: string, phone: string, pin: string) => {
       const cleanName = name.trim();
-      const cleanPhone = phone.trim();
+      const cleanPhone = normalizePhone(phone);
       const cleanPin = pin.trim();
 
       if (!cleanName || !cleanPhone || !cleanPin || cleanPin.length !== 4) {
         return null;
       }
 
-      const phoneExists = users.some((user) => user.phone === cleanPhone);
+      const phoneExists = users.some((user) => normalizePhone(user.phone) === cleanPhone);
       if (phoneExists) {
         return null;
       }
@@ -199,7 +273,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         active: true,
       };
 
-      const nextUsers = [...users, createdUser];
+      const nextUsers = ensureAdminUser([...users, createdUser]);
       setUsers(nextUsers);
       syncUsersToStorage(nextUsers);
       setCurrentUser(createdUser);

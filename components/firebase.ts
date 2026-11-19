@@ -65,8 +65,9 @@ export async function writeFirestoreDocument<T extends object>(collection: strin
 
   try {
     await setDoc(doc(db, collection, id), value as Record<string, unknown>, { merge: true });
-  } catch {
-    // ignore Firebase write failures and fall back to local persistence
+  } catch (error) {
+    console.error("[Firebase] Firestore write failed", { collection, id, error });
+    throw error;
   }
 }
 
@@ -90,8 +91,9 @@ export async function writeRealtimeDocument<T>(path: string, value: T) {
 
   try {
     await set(ref(database, path), value);
-  } catch {
-    // ignore Firebase write failures and fall back to local persistence
+  } catch (error) {
+    console.error("[Firebase] Realtime Database write failed", { path, error });
+    throw error;
   }
 }
 

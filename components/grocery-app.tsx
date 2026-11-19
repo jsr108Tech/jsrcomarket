@@ -26,10 +26,12 @@ const STATE_STORAGE_KEY = "jsr-grocery-state-v1";
 const ARCHIVE_STORAGE_KEY = "jsr-grocery-archives-v1";
 
 function makeEntryMap(users: AppUser[]) {
-  return users.reduce<Record<string, { quantity: number; cost: number }>>((acc, user) => {
-    acc[user.id] = { quantity: 0, cost: 0 };
-    return acc;
-  }, {});
+  return users
+    .filter((user) => user.role !== "admin")
+    .reduce<Record<string, { quantity: number; cost: number }>>((acc, user) => {
+      acc[user.id] = { quantity: 0, cost: 0 };
+      return acc;
+    }, {});
 }
 
 function createDefaultRows(users: AppUser[]): WeeklyRow[] {
@@ -40,9 +42,9 @@ function createDefaultRows(users: AppUser[]): WeeklyRow[] {
     description: item.description,
     smallImage: item.smallImage,
     quantityType: item.quantityType,
-    totalQuantity: index === 0 ? 12 : index === 1 ? 8 : 0,
-    totalAmount: index === 0 ? 420 : index === 1 ? 310 : 0,
-    rowNote: index === 0 ? "Need fresh stock by Saturday." : "",
+    totalQuantity: 0,
+    totalAmount: 0,
+    rowNote: "",
     entries: makeEntryMap(users),
   }));
 }
@@ -50,16 +52,37 @@ function createDefaultRows(users: AppUser[]): WeeklyRow[] {
 function ensureRowEntries(rows: WeeklyRow[], users: AppUser[]) {
   return rows.map((row) => {
     const nextEntries = { ...makeEntryMap(users), ...row.entries };
-    const totalQuantity = Object.values(nextEntries).reduce((sum, entry) => sum + entry.quantity, 0);
-    const totalAmount = Object.values(nextEntries).reduce((sum, entry) => sum + entry.cost, 0);
 
     return {
       ...row,
       entries: nextEntries,
-      totalQuantity,
-      totalAmount,
+      totalQuantity: row.totalQuantity ?? Object.values(nextEntries).reduce((sum, entry) => sum + entry.quantity, 0),
+      totalAmount: row.totalAmount ?? Object.values(nextEntries).reduce((sum, entry) => sum + entry.cost, 0),
     };
   });
+}
+
+function distributeAdminPurchase(row: WeeklyRow): WeeklyRow {
+  const orderedTotal = Object.values(row.entries).reduce((sum, entry) => sum + (entry.quantity ?? 0), 0);
+  const actualAmount = Number(row.totalAmount ?? 0);
+
+  if (!orderedTotal || actualAmount <= 0) {
+    return row;
+  }
+
+  const nextEntries = Object.fromEntries(
+    Object.entries(row.entries).map(([userId, entry]) => {
+      const userQuantity = Number(entry.quantity ?? 0);
+      const splitAmount = orderedTotal === 0 ? 0 : (userQuantity / orderedTotal) * actualAmount;
+
+      return [userId, { ...entry, cost: Number(splitAmount.toFixed(2)) }];
+    }),
+  );
+
+  return {
+    ...row,
+    entries: nextEntries,
+  };
 }
 
 function isArchivedWithinRetention(snapshot: WeeklySnapshot) {
@@ -150,7 +173,7 @@ function GroceryAppContent() {
   const [rows, setRows] = useState<WeeklyRow[]>(() => createDefaultRows(users));
   const [comment, setComment] = useState<string>("Fresh produce and weekly family essentials.");
   const [archives, setArchives] = useState<WeeklySnapshot[]>([]);
-  const [hydrated, setHydrated] = useState(false);
+  const [hydrated, setHydrated] = useState(() => !firebaseEnabled || !database);
   const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null);
   const [showCatalog, setShowCatalog] = useState(false);
   const [itemFilter, setItemFilter] = useState("");
@@ -183,7 +206,6 @@ function GroceryAppContent() {
     hydrate();
 
     if (!firebaseEnabled || !database) {
-      setHydrated(true);
       return () => {
         ignore = true;
       };
@@ -279,14 +301,29 @@ function GroceryAppContent() {
     }
 
     setRows((prev) =>
-      prev.map((row) =>
-        row.id === rowId
-          ? {
-              ...row,
-              [field]: value,
-            }
-          : row,
-      ),
+      prev.map((row) => {
+        if (row.id !== rowId) {
+          return row;
+        }
+
+        const nextRow = {
+          ...row,
+          [field]: value,
+        };
+
+        if (field === "totalAmount") {
+          return distributeAdminPurchase(nextRow as WeeklyRow);
+        }
+
+        if (field === "totalQuantity") {
+          return {
+            ...nextRow,
+            totalQuantity: Number(value || 0),
+          };
+        }
+
+        return nextRow;
+      }),
     );
   };
 
@@ -310,12 +347,20 @@ function GroceryAppContent() {
           },
         };
 
-        const totalQuantity = Object.values(nextEntries).reduce((sum, entry) => sum + entry.quantity, 0);
-        const totalAmount = Object.values(nextEntries).reduce((sum, entry) => sum + entry.cost, 0);
-
-        return {
+        const nextRow = {
           ...row,
           entries: nextEntries,
+        };
+
+        if (field === "quantity") {
+          return distributeAdminPurchase(nextRow);
+        }
+
+        const totalQuantity = Object.values(nextEntries).reduce((sum, entry) => sum + (entry.quantity ?? 0), 0);
+        const totalAmount = Object.values(nextEntries).reduce((sum, entry) => sum + (entry.cost ?? 0), 0);
+
+        return {
+          ...nextRow,
           totalQuantity,
           totalAmount,
         };
@@ -442,7 +487,7 @@ function GroceryAppContent() {
         {authError && <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{authError}</p>}
 
         <div className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700">
-          Admin access uses phone number <span className="font-bold">admin</span> and password <span className="font-bold">JSR108</span>.
+        Admin access uses phone number <span className="font-bold">admin</span> and PIN <span className="font-bold">JSR108</span> or <span className="font-bold">1234</span>.
         </div>
 
         <button
