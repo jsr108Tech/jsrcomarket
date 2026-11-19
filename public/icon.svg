@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Grocery app icon">
+  <rect width="128" height="128" rx="28" fill="#0f172a"/>
+  <path d="M40 38h48a8 8 0 0 1 8 8v44a8 8 0 0 1-8 8H40a8 8 0 0 1-8-8V46a8 8 0 0 1 8-8Z" fill="#34d399"/>
+  <path d="M48 48h32v14H48zm0 20h32v14H48z" fill="#f8fafc" fill-opacity="0.85"/>
+  <path d="M92 52h12v18H92zm0 20h12v18H92z" fill="#f8fafc" fill-opacity="0.85"/>
+</svg>
