@@ -59,10 +59,12 @@ export function WeeklyMatrixTable({ rows, users, currentUser, isAdmin, onRowChan
           <tfoot className="bg-slate-100 text-left text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-700">
             <tr>
               <td className="border-t border-slate-200 px-2 py-3 text-slate-900">Total</td>
+              <td className="border-t border-slate-200 px-2 py-3 text-slate-900">₹{totalActualPrice.toFixed(2)} / {totalActualQty}</td>
+              
               {userTotals.map((amount, index) => (
                 <td key={activeUsers[index].id} className="border-t border-slate-200 px-2 py-3 text-slate-900">₹{amount.toFixed(2)}</td>
               ))}
-              <td className="border-t border-slate-200 px-2 py-3 text-slate-900">₹{totalActualPrice.toFixed(2)} / {totalActualQty}</td>
+              
               <td className="border-t border-slate-200 px-2 py-3 text-slate-500">-</td>
             </tr>
           </tfoot>

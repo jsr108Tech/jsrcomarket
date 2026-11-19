@@ -24,6 +24,7 @@ import type { AppUser, CatalogItem, WeeklyRow, WeeklySnapshot } from "@/componen
 
 const STATE_STORAGE_KEY = "jsr-grocery-state-v1";
 const ARCHIVE_STORAGE_KEY = "jsr-grocery-archives-v1";
+const DEFAULT_COMMENT = "Fresh produce and weekly family essentials.";
 
 function makeEntryMap(users: AppUser[]) {
   return users
@@ -115,19 +116,19 @@ function getStoredRows(users: AppUser[]) {
 
 function getStoredComment() {
   if (typeof window === "undefined") {
-    return "Fresh produce and weekly family essentials.";
+    return DEFAULT_COMMENT;
   }
 
   try {
     const saved = window.localStorage.getItem(STATE_STORAGE_KEY);
     if (!saved) {
-      return "Fresh produce and weekly family essentials.";
+      return DEFAULT_COMMENT;
     }
 
     const parsed = JSON.parse(saved) as { rows?: WeeklyRow[]; comment?: string };
-    return parsed.comment ?? "Fresh produce and weekly family essentials.";
+    return parsed.comment ?? DEFAULT_COMMENT;
   } catch {
-    return "Fresh produce and weekly family essentials.";
+    return DEFAULT_COMMENT;
   }
 }
 
@@ -171,11 +172,13 @@ async function readFirebaseState(users: AppUser[]) {
 function GroceryAppContent() {
   const { users, currentUser, isAdmin, login, register, logout, toggleUserActive, addUser } = useAuth();
   const [rows, setRows] = useState<WeeklyRow[]>(() => createDefaultRows(users));
-  const [comment, setComment] = useState<string>("Fresh produce and weekly family essentials.");
+  const [comment, setComment] = useState<string>(DEFAULT_COMMENT);
   const [archives, setArchives] = useState<WeeklySnapshot[]>([]);
   const [hydrated, setHydrated] = useState(() => !firebaseEnabled || !database);
   const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null);
   const [showCatalog, setShowCatalog] = useState(false);
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [itemFilter, setItemFilter] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [phone, setPhone] = useState("");
@@ -368,11 +371,15 @@ function GroceryAppContent() {
     );
   };
 
-  const handleArchive = () => {
+  const handleArchiveRequest = () => {
     if (!isAdmin || selectedArchive) {
       return;
     }
 
+    setShowArchiveConfirm(true);
+  };
+
+  const handleArchive = () => {
     const snapshot: WeeklySnapshot = {
       id: crypto.randomUUID(),
       weekLabel: `Week of ${new Date().toLocaleDateString()}`,
@@ -382,8 +389,23 @@ function GroceryAppContent() {
       users: users.map((user) => ({ ...user })),
     };
 
-    setArchives((prev) => [snapshot, ...prev.filter(isArchivedWithinRetention)].slice(0, 6));
-    setSelectedArchiveId(snapshot.id);
+    const blankRows = createDefaultRows(users);
+    const nextArchives = [snapshot, ...archives.filter(isArchivedWithinRetention)].slice(0, 6);
+
+    setArchives(nextArchives);
+    setRows(blankRows);
+    setComment(DEFAULT_COMMENT);
+    setItemFilter("");
+    setSelectedArchiveId(null);
+    setShowArchiveConfirm(false);
+
+    if (firebaseEnabled && database) {
+      writeRealtimeDocument("grocery-state", { rows: blankRows, comment: DEFAULT_COMMENT });
+    }
+
+    if (firebaseEnabled && db) {
+      writeFirestoreDocument("app", "archives", { archives: nextArchives });
+    }
   };
 
   const handleSubmitAuth = () => {
@@ -539,7 +561,7 @@ function GroceryAppContent() {
             }
             setComment(value);
           }}
-          onArchive={handleArchive}
+          onArchive={handleArchiveRequest}
         />
 
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -564,6 +586,15 @@ function GroceryAppContent() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setShowUserModal(true)}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
+              >
+                Users
+              </button>
+            )}
             <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 shadow-sm">
               <span className="font-medium text-slate-500">Filter</span>
               <input
@@ -577,12 +608,56 @@ function GroceryAppContent() {
           </div>
         </div>
 
-        <UserManagementPanel
-          users={users}
-          isAdmin={isAdmin}
-          onAddUser={handleAddUser}
-          onToggleUser={toggleUserActive}
-        />
+        {isAdmin && showUserModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+            <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <h3 className="text-xl font-bold text-slate-900">User management</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowUserModal(false)}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
+                >
+                  Close
+                </button>
+              </div>
+              <UserManagementPanel
+                users={users}
+                isAdmin={isAdmin}
+                onAddUser={handleAddUser}
+                onToggleUser={toggleUserActive}
+              />
+            </div>
+          </div>
+        )}
+
+        {showArchiveConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+            <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+              <h3 className="text-xl font-bold text-slate-900">Archive current week?</h3>
+              <p className="mt-3 text-sm leading-6 text-slate-600">
+                This will save the current board to archives and create a fresh blank live board for the next week.
+              </p>
+
+              <div className="mt-5 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowArchiveConfirm(false)}
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleArchive}
+                  className="rounded-xl bg-rose-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-600"
+                >
+                  Archive & reset
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <WeeklyMatrixTable
           rows={filteredRows}
