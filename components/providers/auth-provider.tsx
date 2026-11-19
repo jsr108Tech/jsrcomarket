@@ -207,14 +207,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    syncUsersToStorage(users);
-  }, [hydrated, syncUsersToStorage, users]);
-
-  useEffect(() => {
-    if (!hydrated || typeof window === "undefined") {
-      return;
-    }
-
     syncSessionToStorage(currentUser);
   }, [currentUser, hydrated, syncSessionToStorage]);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ARCHIVE_RETENTION_MONTHS, BASE_CATALOG } from "@/components/catalog";
 import { ArchiveListView } from "@/components/archive-list-view";
@@ -227,29 +227,28 @@ function GroceryAppContent() {
     };
   }, [users]);
 
-  useEffect(() => {
-    if (!hydrated || typeof window === "undefined") {
-      return;
+  const persistBoardState = useCallback(
+    (nextRows: WeeklyRow[], nextComment: string) => {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify({ rows: nextRows, comment: nextComment }));
+      }
+
+      if (firebaseEnabled && database) {
+        writeRealtimeDocument("grocery-state", { rows: nextRows, comment: nextComment });
+      }
+    },
+    [],
+  );
+
+  const persistArchiveState = useCallback((nextArchives: WeeklySnapshot[]) => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify(nextArchives));
     }
-
-    window.localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify({ rows, comment }));
-
-    if (firebaseEnabled && database) {
-      writeRealtimeDocument("grocery-state", { rows, comment });
-    }
-  }, [comment, hydrated, rows]);
-
-  useEffect(() => {
-    if (!hydrated || typeof window === "undefined") {
-      return;
-    }
-
-    window.localStorage.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify(archives));
 
     if (firebaseEnabled && db) {
-      writeFirestoreDocument("app", "archives", { archives });
+      writeFirestoreDocument("app", "archives", { archives: nextArchives });
     }
-  }, [archives, hydrated]);
+  }, []);
 
   useEffect(() => {
     if (currentUser && !users.some((user) => user.id === currentUser.id && user.active)) {
@@ -295,7 +294,9 @@ function GroceryAppContent() {
       entries: makeEntryMap(users),
     };
 
-    setRows((prev) => [...prev, newRow]);
+    const nextRows = [...rows, newRow];
+    setRows(nextRows);
+    persistBoardState(nextRows, comment);
   };
 
   const handleRowChange = (rowId: string, field: "totalQuantity" | "totalAmount" | "rowNote", value: number | string) => {
@@ -303,31 +304,32 @@ function GroceryAppContent() {
       return;
     }
 
-    setRows((prev) =>
-      prev.map((row) => {
-        if (row.id !== rowId) {
-          return row;
-        }
+    const nextRows = rows.map((row) => {
+      if (row.id !== rowId) {
+        return row;
+      }
 
-        const nextRow = {
-          ...row,
-          [field]: value,
+      const nextRow = {
+        ...row,
+        [field]: value,
+      };
+
+      if (field === "totalAmount") {
+        return distributeAdminPurchase(nextRow as WeeklyRow);
+      }
+
+      if (field === "totalQuantity") {
+        return {
+          ...nextRow,
+          totalQuantity: Number(value || 0),
         };
+      }
 
-        if (field === "totalAmount") {
-          return distributeAdminPurchase(nextRow as WeeklyRow);
-        }
+      return nextRow;
+    });
 
-        if (field === "totalQuantity") {
-          return {
-            ...nextRow,
-            totalQuantity: Number(value || 0),
-          };
-        }
-
-        return nextRow;
-      }),
-    );
+    setRows(nextRows);
+    persistBoardState(nextRows, comment);
   };
 
   const handleEntryChange = (rowId: string, userId: string, field: "quantity" | "cost", value: number) => {
@@ -335,40 +337,41 @@ function GroceryAppContent() {
       return;
     }
 
-    setRows((prev) =>
-      prev.map((row) => {
-        if (row.id !== rowId) {
-          return row;
-        }
+    const nextRows = rows.map((row) => {
+      if (row.id !== rowId) {
+        return row;
+      }
 
-        const nextEntries = {
-          ...row.entries,
-          [userId]: {
-            quantity: row.entries[userId]?.quantity ?? 0,
-            cost: row.entries[userId]?.cost ?? 0,
-            [field]: value,
-          },
-        };
+      const nextEntries = {
+        ...row.entries,
+        [userId]: {
+          quantity: row.entries[userId]?.quantity ?? 0,
+          cost: row.entries[userId]?.cost ?? 0,
+          [field]: value,
+        },
+      };
 
-        const nextRow = {
-          ...row,
-          entries: nextEntries,
-        };
+      const nextRow = {
+        ...row,
+        entries: nextEntries,
+      };
 
-        if (field === "quantity") {
-          return distributeAdminPurchase(nextRow);
-        }
+      if (field === "quantity") {
+        return distributeAdminPurchase(nextRow);
+      }
 
-        const totalQuantity = Object.values(nextEntries).reduce((sum, entry) => sum + (entry.quantity ?? 0), 0);
-        const totalAmount = Object.values(nextEntries).reduce((sum, entry) => sum + (entry.cost ?? 0), 0);
+      const totalQuantity = Object.values(nextEntries).reduce((sum, entry) => sum + (entry.quantity ?? 0), 0);
+      const totalAmount = Object.values(nextEntries).reduce((sum, entry) => sum + (entry.cost ?? 0), 0);
 
-        return {
-          ...nextRow,
-          totalQuantity,
-          totalAmount,
-        };
-      }),
-    );
+      return {
+        ...nextRow,
+        totalQuantity,
+        totalAmount,
+      };
+    });
+
+    setRows(nextRows);
+    persistBoardState(nextRows, comment);
   };
 
   const handleArchiveRequest = () => {
@@ -399,13 +402,8 @@ function GroceryAppContent() {
     setSelectedArchiveId(null);
     setShowArchiveConfirm(false);
 
-    if (firebaseEnabled && database) {
-      writeRealtimeDocument("grocery-state", { rows: blankRows, comment: DEFAULT_COMMENT });
-    }
-
-    if (firebaseEnabled && db) {
-      writeFirestoreDocument("app", "archives", { archives: nextArchives });
-    }
+    persistBoardState(blankRows, DEFAULT_COMMENT);
+    persistArchiveState(nextArchives);
   };
 
   const handleSubmitAuth = () => {
@@ -560,6 +558,7 @@ function GroceryAppContent() {
               return;
             }
             setComment(value);
+            persistBoardState(rows, value);
           }}
           onArchive={handleArchiveRequest}
         />
