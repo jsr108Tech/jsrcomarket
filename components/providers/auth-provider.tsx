@@ -77,6 +77,20 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+const readLocalUsers = (): AppUser[] => {
+  if (typeof window === "undefined") {
+    return ensureAdminUser(DEFAULT_USERS);
+  }
+
+  try {
+    const stored = window.localStorage.getItem(USERS_STORAGE_KEY);
+    const parsed = stored ? (JSON.parse(stored) as AppUser[]) : [];
+    return mergeUsers(ensureAdminUser(DEFAULT_USERS), parsed);
+  } catch {
+    return ensureAdminUser(DEFAULT_USERS);
+  }
+};
+
 const readStoredUsers = async (): Promise<AppUser[]> => {
   let firebaseUsers: AppUser[] = [];
 
@@ -95,31 +109,11 @@ const readStoredUsers = async (): Promise<AppUser[]> => {
     }
   }
 
-  if (typeof window === "undefined") {
-    return ensureAdminUser(firebaseUsers.length ? firebaseUsers : DEFAULT_USERS);
-  }
-
-  try {
-    const stored = window.localStorage.getItem(USERS_STORAGE_KEY);
-    const parsed = stored ? (JSON.parse(stored) as AppUser[]) : [];
-
-    const merged = mergeUsers(ensureAdminUser(DEFAULT_USERS), [...firebaseUsers, ...parsed]);
-    if (stored && parsed.length) {
-      return merged;
-    }
-
-    if (firebaseUsers.length) {
-      return merged;
-    }
-
-    window.localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(merged));
-    return merged;
-  } catch {
-    return ensureAdminUser(firebaseUsers.length ? firebaseUsers : DEFAULT_USERS);
-  }
+  const localUsers = readLocalUsers();
+  return mergeUsers(ensureAdminUser(DEFAULT_USERS), [...firebaseUsers, ...localUsers]);
 };
 
-const readStoredSession = async (): Promise<AppUser | null> => {
+const readStoredSession = (): AppUser | null => {
   if (typeof window === "undefined") {
     return null;
   }
@@ -138,8 +132,8 @@ const readStoredSession = async (): Promise<AppUser | null> => {
 };
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [users, setUsers] = useState<AppUser[]>(DEFAULT_USERS);
-  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [users, setUsers] = useState<AppUser[]>(() => readLocalUsers());
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => readStoredSession());
   const [hydrated, setHydrated] = useState(false);
 
   const syncUsersToStorage = useCallback(async (nextUsers: AppUser[]) => {
@@ -186,11 +180,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const hydrate = async () => {
       const storedUsers = await readStoredUsers();
-      const storedSession = await readStoredSession();
 
       if (!ignore) {
-        setUsers(storedUsers);
-        setCurrentUser(storedSession);
+        setUsers((prev) => mergeUsers(ensureAdminUser(DEFAULT_USERS), [...storedUsers, ...prev]));
+        setCurrentUser((prev) => prev ?? readStoredSession());
         setHydrated(true);
       }
     };

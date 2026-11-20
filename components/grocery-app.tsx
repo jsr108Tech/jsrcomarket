@@ -246,7 +246,10 @@ function GroceryAppContent() {
     }
 
     if (firebaseEnabled && db) {
-      writeFirestoreDocument("app", "archives", { archives: nextArchives });
+      Promise.allSettled([
+        writeFirestoreDocument("app", "archives", { archives: nextArchives }),
+        ...nextArchives.map((archive) => writeFirestoreDocument("archives", archive.id, archive)),
+      ]).catch(() => undefined);
     }
   }, []);
 
