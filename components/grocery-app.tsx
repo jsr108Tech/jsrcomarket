@@ -259,6 +259,15 @@ function GroceryAppContent() {
     }
   }, [currentUser, logout, users]);
 
+  useEffect(() => {
+    if (!currentUser) {
+      setPhone("");
+      setPin("");
+      setName("");
+      setAuthError("");
+    }
+  }, [currentUser]);
+
   const displayRows = selectedArchive ? selectedArchive.rows : rows;
   const filteredRows = useMemo(() => {
     const normalized = itemFilter.trim().toLowerCase();
@@ -421,7 +430,11 @@ function GroceryAppContent() {
       const user = login(phone, pin);
       if (!user) {
         setAuthError("Incorrect phone number or PIN.");
+        return;
       }
+
+      setPhone("");
+      setPin("");
       return;
     }
 

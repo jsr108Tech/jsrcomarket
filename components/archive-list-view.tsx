@@ -8,6 +8,14 @@ type Props = {
   onSelectArchive: (archive: WeeklySnapshot) => void;
 };
 
+const formatArchiveDate = (value: string) =>
+  new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(value));
+
 export function ArchiveListView({ archives, selectedArchiveId, onSelectArchive }: Props) {
   if (!archives.length) {
     return (
@@ -37,7 +45,7 @@ export function ArchiveListView({ archives, selectedArchiveId, onSelectArchive }
         >
           <div className="flex items-center justify-between gap-2">
             <span className="font-semibold text-slate-900">{archive.weekLabel}</span>
-            <span className="text-xs text-slate-500">{new Date(archive.archivedAt).toLocaleDateString()}</span>
+            <span className="text-xs text-slate-500">{formatArchiveDate(archive.archivedAt)}</span>
           </div>
           <p className="mt-2 text-sm text-slate-600">{archive.comment || "No comment on archive"}</p>
         </button>

@@ -30,6 +30,31 @@ const DEFAULT_USERS: AppUser[] = [
 
 const normalizePhone = (value: string) => value.replace(/\D/g, "");
 
+function sanitizeUser(user: Partial<AppUser> | null | undefined): AppUser | null {
+  if (!user || typeof user !== "object") {
+    return null;
+  }
+
+  const rawPhone = typeof user.phone === "string" ? user.phone : "";
+  const normalizedPhone = normalizePhone(rawPhone);
+  const rawPin = typeof user.pin === "string" ? user.pin.trim() : "";
+  const name = typeof user.name === "string" ? user.name.trim() : "";
+  const role = user.role === "admin" ? "admin" : "user";
+
+  if (!name || !normalizedPhone || !rawPin || rawPin.length < 4) {
+    return null;
+  }
+
+  return {
+    id: user.id || `${role}:${normalizedPhone}`,
+    name,
+    phone: normalizedPhone,
+    pin: rawPin,
+    role,
+    active: user.active !== false,
+  };
+}
+
 function ensureAdminUser(users: AppUser[]): AppUser[] {
   const adminUser = users.find((user) => user.role === "admin");
 
@@ -48,7 +73,10 @@ function ensureAdminUser(users: AppUser[]): AppUser[] {
 }
 
 function mergeUsers(baseUsers: AppUser[], incomingUsers: AppUser[]): AppUser[] {
-  const combined = [...baseUsers, ...incomingUsers];
+  const combined = [...baseUsers, ...incomingUsers]
+    .map((user) => sanitizeUser(user))
+    .filter((user): user is AppUser => Boolean(user));
+
   const map = new Map<string, AppUser>();
 
   for (const user of combined) {
@@ -57,6 +85,7 @@ function mergeUsers(baseUsers: AppUser[], incomingUsers: AppUser[]): AppUser[] {
       ...user,
       phone: normalizePhone(user.phone) || user.phone,
       role: user.role === "admin" ? "admin" : "user",
+      active: user.active !== false,
     };
     map.set(key, normalizedUser);
   }
@@ -85,7 +114,13 @@ const readLocalUsers = (): AppUser[] => {
   try {
     const stored = window.localStorage.getItem(USERS_STORAGE_KEY);
     const parsed = stored ? (JSON.parse(stored) as AppUser[]) : [];
-    return mergeUsers(ensureAdminUser(DEFAULT_USERS), parsed);
+    const validUsers = Array.isArray(parsed)
+      ? parsed
+          .map((user) => sanitizeUser(user))
+          .filter((user): user is AppUser => Boolean(user))
+      : [];
+
+    return mergeUsers(ensureAdminUser(DEFAULT_USERS), validUsers);
   } catch {
     return ensureAdminUser(DEFAULT_USERS);
   }
@@ -178,17 +213,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let ignore = false;
 
-    const hydrate = async () => {
-      const storedUsers = await readStoredUsers();
+    const hydrateLocalState = () => {
+      const localUsers = readLocalUsers();
+      setUsers(localUsers);
+      setCurrentUser((prev) => prev ?? readStoredSession());
+      setHydrated(true);
+    };
+
+    hydrateLocalState();
+
+    const hydrateRemoteUsers = async () => {
+      const remoteUsers = await readStoredUsers();
 
       if (!ignore) {
-        setUsers((prev) => mergeUsers(ensureAdminUser(DEFAULT_USERS), [...storedUsers, ...prev]));
-        setCurrentUser((prev) => prev ?? readStoredSession());
-        setHydrated(true);
+        setUsers((prev) => mergeUsers(ensureAdminUser(DEFAULT_USERS), [...remoteUsers, ...prev]));
       }
     };
 
-    hydrate();
+    hydrateRemoteUsers();
 
     return () => {
       ignore = true;
@@ -207,10 +249,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (phone: string, pin: string) => {
       const normalizedPhone = normalizePhone(phone);
       const normalizedPin = pin.trim();
+      const candidateUsers = mergeUsers(ensureAdminUser(DEFAULT_USERS), [...users, ...readLocalUsers()]);
 
       const adminMatch =
         normalizedPhone === normalizePhone("admin") && (normalizedPin === "JSR108" || normalizedPin === "1234")
-          ? users.find((user) => user.role === "admin")
+          ? candidateUsers.find((user) => user.role === "admin")
           : null;
 
       if (adminMatch && adminMatch.active) {
@@ -219,8 +262,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return adminMatch;
       }
 
-      const matchedUser = users.find(
-        (user) => normalizePhone(user.phone) === normalizedPhone && user.pin === normalizedPin && user.active,
+      const matchedUser = candidateUsers.find(
+        (user) => normalizePhone(user.phone) === normalizedPhone && String(user.pin).trim() === normalizedPin && user.active,
       );
 
       if (matchedUser) {
@@ -244,7 +287,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return null;
       }
 
-      const phoneExists = users.some((user) => normalizePhone(user.phone) === cleanPhone);
+      const candidateUsers = mergeUsers(ensureAdminUser(DEFAULT_USERS), [...users, ...readLocalUsers()]);
+      const phoneExists = candidateUsers.some((user) => normalizePhone(user.phone) === cleanPhone);
       if (phoneExists) {
         return null;
       }
@@ -258,7 +302,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         active: true,
       };
 
-      const nextUsers = ensureAdminUser([...users, createdUser]);
+      const nextUsers = ensureAdminUser([...candidateUsers, createdUser]);
       setUsers(nextUsers);
       syncUsersToStorage(nextUsers);
       setCurrentUser(createdUser);
