@@ -238,6 +238,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === USERS_STORAGE_KEY) {
+        setUsers(readLocalUsers());
+      }
+
+      if (event.key === SESSION_STORAGE_KEY) {
+        setCurrentUser(event.newValue ? (JSON.parse(event.newValue) as AppUser) : null);
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
+  useEffect(() => {
     if (!hydrated || typeof window === "undefined") {
       return;
     }
